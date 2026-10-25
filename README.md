@@ -471,3 +471,187 @@ should have the same 31 days.
 
 Commit, push the branch and open a pull request. Merge it when the checks are
 green.
+
+# Experiment tracking with MLflow
+
+In this session you train a model on the taxi trips and keep track of every
+run with [MLflow](https://mlflow.org/): its parameters, its metrics and the
+model it produced.
+
+The model predicts how long a trip takes, in minutes, from its distance, the
+hour and day of the week of the pickup, and the pickup and dropoff zones.
+
+## Exercise 1: your first run
+
+`main` is protected since the last session: work on a branch and open a pull
+request at the end.
+
+```bash
+git checkout main
+git pull
+git checkout -b first-run
+```
+
+### Install MLflow
+
+Add `mlflow` and `scikit-learn` to `requirements.txt`. MLflow 3.17 does not
+support `pyarrow` 26 yet, so change its pin to 25:
+
+```
+pandas==3.0.6
+pyarrow==25.0.0
+mlflow==3.17.2
+scikit-learn==1.9.1
+```
+
+Install them in your virtual environment:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Prepare the data
+
+The model reads `data/trips.parquet`, the file `formats.py` wrote in the
+storage session. If you do not have it, copy the file you downloaded:
+
+```bash
+cp data/yellow_tripdata_2024-01.parquet data/trips.parquet
+```
+
+Create a file `features.py`. It computes the duration of each trip and the
+features, keeps 100,000 trips so a run takes seconds, and splits them in a
+training and a test set:
+
+```python
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+FEATURES = ["trip_distance", "pickup_hour", "pickup_weekday",
+            "PULocationID", "DOLocationID"]
+
+
+def load_trips(path="data/trips.parquet", n=100_000):
+    df = pd.read_parquet(path)
+    df["duration_min"] = (
+        df["tpep_dropoff_datetime"] - df["tpep_pickup_datetime"]
+    ).dt.total_seconds() / 60
+    df["pickup_hour"] = df["tpep_pickup_datetime"].dt.hour
+    df["pickup_weekday"] = df["tpep_pickup_datetime"].dt.weekday
+    # Drop trips of less than a minute or more than two hours
+    df = df[df["duration_min"].between(1, 120)]
+    df = df.sample(n, random_state=42)
+    X = df[FEATURES].astype("float64")
+    return train_test_split(X, df["duration_min"],
+                            test_size=0.2, random_state=42)
+```
+
+### Train and log a run
+
+Create a file `train.py`:
+
+```python
+import mlflow
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+
+from features import load_trips
+
+X_train, X_test, y_train, y_test = load_trips()
+
+mlflow.set_experiment("trip-duration")
+
+with mlflow.start_run():
+    params = {"n_estimators": 50, "max_depth": 5}
+    mlflow.log_params(params)
+
+    model = RandomForestRegressor(**params, random_state=42)
+    model.fit(X_train, y_train)
+
+    mae = mean_absolute_error(y_test, model.predict(X_test))
+    mlflow.log_metric("mae", mae)
+    mlflow.sklearn.log_model(
+        model,
+        name="model",
+        input_example=X_test[:5],
+        # skops only loads types it knows are safe. Tree models must
+        # be trusted explicitly: only for models you trust.
+        skops_trusted_types=["sklearn.tree._tree.Tree"],
+    )
+    print(f"MAE: {mae:.2f} minutes")
+```
+
+Run it:
+
+```bash
+python train.py
+```
+
+MLflow prints a few log lines and warnings. At the end you should see:
+
+```
+MAE: 3.81 minutes
+```
+
+On average, the model is almost 4 minutes off.
+
+### Look at the run
+
+MLflow wrote two things next to your code: `mlflow.db`, a SQLite database with
+the parameters and metrics, and `mlruns/`, with the model files. Neither
+belongs in Git. Add them to `.gitignore`:
+
+```
+mlflow.db
+mlruns/
+```
+
+Start the MLflow UI:
+
+```bash
+mlflow ui --port 5050
+```
+
+Open http://localhost:5050 and click on the `trip-duration` experiment. Your
+run has a random name. Click on it and find:
+
+- the parameters, `n_estimators` and `max_depth`
+- the metric, `mae`
+- the model in the **Artifacts** tab: the `MLmodel` file, `requirements.txt`
+  and the input example
+
+Leave the UI running and open a second terminal for the next step. Activate
+the virtual environment there too.
+
+### A second run
+
+In `train.py`, change `max_depth` to 10 and run it again:
+
+```bash
+python train.py
+```
+
+```
+MAE: 3.44 minutes
+```
+
+Reload the UI: the experiment now has two runs. Select both and click
+**Compare**.
+
+### Open a pull request
+
+```bash
+git add requirements.txt .gitignore features.py train.py
+git commit -m "Train a first model and track it with MLflow"
+git push -u origin first-run
+```
+
+Open a pull request and merge it when the checks are green.
+
+Questions:
+
+- You change `train.py` and commit without running it. How do you know which
+  run used which version of the code? Look at the run's details in the UI.
+- Delete `mlflow.db` and reload the UI. What happened to your runs? What would
+  happen if your laptop broke?
