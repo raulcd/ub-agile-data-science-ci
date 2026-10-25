@@ -1,26 +1,24 @@
 services:
   storage:
     image: rustfs/rustfs:1.0.1
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    ports: ["9000:9000", "9001:9001"]
     environment:
       RUSTFS_ACCESS_KEY: student
       RUSTFS_SECRET_KEY: student-secret
-    volumes:
-      - s3data:/data
+    volumes: [s3data:/data]
 
-  web:
-    build: ./app
-    ports:
-      - "5001:5000"
+  mlflow:
+    build: ./server
+    ports: ["5050:5000"]
     environment:
-      S3_ENDPOINT: http://storage:9000
+      MLFLOW_S3_ENDPOINT_URL: http://storage:9000
       AWS_ACCESS_KEY_ID: student
       AWS_SECRET_ACCESS_KEY: student-secret
-      AWS_REGION: us-east-1
-    depends_on:
-      - storage
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination s3://mlflow
+    volumes: [mlflowdb:/mlflow]
+    depends_on: [storage]
 
-volumes:
-  s3data:
+volumes: {s3data: {}, mlflowdb: {}}
