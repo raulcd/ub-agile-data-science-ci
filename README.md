@@ -1027,8 +1027,6 @@ curl -X POST http://localhost:5002/invocations \
 `rf-depth-20` is 30 times bigger than `rf-depth-10` for 7 seconds less error.
 Promote `rf-depth-10` instead. Create a file `promote.py`:
 
-<!-- TODO verify filter_string against MLflow 3.17 -->
-
 ```python
 import mlflow
 
@@ -1049,9 +1047,19 @@ client.set_registered_model_alias("trip-duration", "champion", version.version)
 python promote.py
 ```
 
+```
+Registered model 'trip-duration' already exists. Creating a new version of this model...
+Created version '2' of model 'trip-duration'.
+version 2
+```
+
 In the UI, `champion` has moved to version 2. Stop `mlflow models serve` with
 `Ctrl+C`, start it again with the same command, and send the same `curl`. The
-predictions change a little: same command, same URL, a new model.
+predictions change a little: same command, same URL, a new model:
+
+```json
+{"predictions": [8.435981531225003, 23.328249313377015]}
+```
 
 ### Open a pull request
 
@@ -1073,8 +1081,6 @@ Questions:
 ## Exercise 5: version the data with DVC (if time allows)
 
 If there is no time in class, do it at home.
-
-<!-- TODO verify this exercise end to end against RustFS -->
 
 Git is not for data, so `data/` is in `.gitignore`. But then nothing records
 which version of `trips.parquet` a model was trained on.
@@ -1102,21 +1108,35 @@ dvc init
 ### Track the data
 
 DVC writes `data/trips.parquet.dvc` next to the data, and Git has to see that
-file. Replace `data/` in `.gitignore` with these two lines: ignore everything
-in `data/` except the `.dvc` files:
+file. DVC refuses to work inside a folder Git ignores, so `data/` cannot stay
+in `.gitignore`. Replace the `data/` line with the other data files, the ones
+DVC does not track:
 
 ```
-data/*
-!data/*.dvc
+data/*.csv
+data/*.json
+data/yellow_tripdata_*
 ```
+
+Then track the Parquet file:
 
 ```bash
 dvc add data/trips.parquet
 cat data/trips.parquet.dvc
 ```
 
+```yaml
+outs:
+- md5: 3fbbab2b8949308a27b6285f36aae825
+  size: 60840464
+  hash: md5
+  path: trips.parquet
+```
+
 The `.dvc` file has the hash (`md5`), the size and the path of the data. That
-is what goes to Git.
+is what goes to Git. DVC also creates `data/.gitignore`, so Git ignores
+`trips.parquet` itself. Check with `git status`: you should see the `.dvc`
+file, not the data.
 
 ### Push the data to a bucket
 
@@ -1137,8 +1157,12 @@ of Git. The rest goes to `.dvc/config`, which you commit.
 dvc push
 ```
 
-Open the `dvc` bucket in the RustFS console: the file is there, named by its
-hash.
+```
+1 file pushed
+```
+
+Open the `dvc` bucket in the RustFS console: the file is under
+`files/md5/3f/`, named by its hash.
 
 ### Get it back
 
@@ -1151,8 +1175,8 @@ ls -la data/
 ### Open a pull request
 
 ```bash
-git add requirements.txt .gitignore .dvc/config .dvc/.gitignore \
-  data/trips.parquet.dvc
+git add requirements.txt .gitignore .dvcignore .dvc/config .dvc/.gitignore \
+  data/.gitignore data/trips.parquet.dvc
 git commit -m "Track the trips data with DVC"
 git push -u origin dvc
 ```
